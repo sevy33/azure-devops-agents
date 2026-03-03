@@ -51,4 +51,78 @@ CodeCoverage/
 # NUnit
 *.VisualState.xml
 TestResult.xml
-nunit-*.xml
+nunit-*.xmlnunit-*.xml
+
+# xUnit
+xunit-*.xml
+
+# Runtime / user files
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+
+# User-specific files (MonoDevelop/Xamarin)
+*.userprefs
+
+# Visual Studio Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ASP.NET Core user secrets & local overrides
+**/appsettings.Local.json
+**/appsettings.Development.Local.json
+**/secrets.json
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Publish output
+[Pp]ublish/
+PublishProfiles/
+
+# Entity Framework migrations bundle
+efbundles/
+
+# Copilot CLI binaries downloaded by the SDK at build time
+**/copilot-cli/
+
+# Temporary MCP config files
+/tmp/ado-agents/
+
+# ── Node / Angular ────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log
+.pnpm-debug.log
+
+# Angular build output
+src/frontend/dist/
+src/frontend/.angular/cache/
+
+# Environment files (Angular)
+src/frontend/src/environments/*.local.ts
+
+# ASP.NET Core settings with real secrets — commit appsettings.Example.json instead
+**/appsettings.json
+**/appsettings.Development.json
+!**/appsettings.Example.json

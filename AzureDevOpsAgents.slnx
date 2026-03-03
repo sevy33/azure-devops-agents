@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/backend/">
+    <Project Path="src/backend/AzureDevOpsAgents.Api/AzureDevOpsAgents.Api.csproj" />
+  </Folder>
+</Solution>
