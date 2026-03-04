@@ -11,8 +11,8 @@ An AI-powered agent app for Azure DevOps. A conversational **Assistant** handles
 - **Agent status bar** — subtle real-time indicator showing when the Developer agent is working
 - **Streaming responses** — token-by-token assistant replies via SignalR
 - **Repo management** — list and clone ADO repos locally per connection
-- **OAuth / Entra ID auth** — secure per-connection Azure DevOps authentication
-- **Encrypted token storage** — AES-GCM encrypted PATs/tokens at rest in SQLite
+- **PAT-based auth** — store a Personal Access Token per connection; encrypted at rest
+- **Encrypted token storage** — AES-GCM encrypted PATs at rest in SQLite
 - **Dark-themed UI** — Angular 21 zoneless frontend with signal-based state and Markdown rendering
 
 ---
@@ -27,7 +27,7 @@ An AI-powered agent app for Azure DevOps. A conversational **Assistant** handles
 | ADO integration | Azure DevOps MCP (`@azure-devops/mcp` via npx) |
 | Real-time | ASP.NET Core SignalR |
 | Database | SQLite via EF Core 10 (code-first) |
-| Auth | Microsoft.Identity.Web 4.4.0 (OAuth / Entra ID) |
+| Auth | Personal Access Token (PAT), AES-GCM encrypted at rest |
 
 ---
 
@@ -39,7 +39,7 @@ azure-devops-agents/
 ├── src/
 │   ├── backend/
 │   │   └── AzureDevOpsAgents.Api/
-│   │       ├── Controllers/        # Connections, Auth, Repos, Chat
+│           ├── controllers/        # Connections, Repos, Chat
 │   │       ├── Data/
 │   │       │   ├── Entities/       # EF Core entities
 │   │       │   ├── Migrations/     # InitialCreate migration
@@ -65,7 +65,7 @@ azure-devops-agents/
 │           ├── chat/               # Message thread + streaming input
 │           ├── agent-status/       # Real-time agent status bar
 │           ├── add-connection-dialog/
-│           └── auth-callback/      # OAuth redirect handler
+│           └── agent-status/       # Real-time agent status bar
 ```
 
 ---
@@ -92,11 +92,6 @@ Edit `src/backend/AzureDevOpsAgents.Api/appsettings.json` (or use user secrets):
   "Database": { "Path": "ado-agents.db" },
   "Encryption": { "Key": "<any-random-string>" },
   "GitHub": { "Token": "<your-github-pat-with-copilot-scope>" },
-  "AzureDevOps": {
-    "ClientId": "<entra-app-client-id>",
-    "ClientSecret": "<entra-app-client-secret>",
-    "CallbackUrl": "http://localhost:5000/api/auth/ado/callback"
-  },
   "RepoStorage": { "Root": "/data/repos" },
   "McpServer": { "ConfigRoot": "/tmp/ado-agents/mcp-configs" }
 }
@@ -127,9 +122,10 @@ cd src/frontend && ng serve
 ### 3. Add a connection
 
 1. Open `http://localhost:4200`
-2. Click **＋** in the sidebar to add an Azure DevOps connection (org URL + project name)
-3. Click **Authenticate** on the connection to complete OAuth with Entra ID
-4. Clone desired repos using the **Clone** button next to each repo
+2. Click **＋** in the sidebar to add an Azure DevOps connection
+3. Fill in the org URL, project name, and a **Personal Access Token** with at least `Code (Read & Write)`, `Work Items (Read & Write)`, and `Build (Read & Execute)` scopes
+4. The connection is immediately ready — no OAuth redirect needed
+5. Clone desired repos using the **Clone** button next to each repo
 
 ### 4. Start chatting
 

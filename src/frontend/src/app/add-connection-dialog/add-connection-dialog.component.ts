@@ -33,6 +33,12 @@ import { ApiService } from '../services/api.service';
               placeholder="YourProject" required />
           </div>
 
+          <div class="field">
+            <label for="pat">Personal Access Token</label>
+            <input id="pat" type="password" [(ngModel)]="pat" name="pat"
+              placeholder="Paste your PAT here" required />
+          </div>
+
           @if (errorMessage()) {
             <div class="dialog__error">{{ errorMessage() }}</div>
           }
@@ -161,18 +167,20 @@ export class AddConnectionDialogComponent {
   displayName = '';
   organizationUrl = '';
   projectName = '';
+  pat = '';
   saving = signal(false);
   errorMessage = signal('');
 
   submit(): void {
-    if (!this.displayName || !this.organizationUrl || !this.projectName) return;
+    if (!this.displayName || !this.organizationUrl || !this.projectName || !this.pat) return;
     this.saving.set(true);
     this.errorMessage.set('');
 
     this.api.createConnection({
       displayName: this.displayName,
       organizationUrl: this.organizationUrl,
-      projectName: this.projectName
+      projectName: this.projectName,
+      pat: this.pat
     }).subscribe({
       next: () => { this.saving.set(false); this.close.emit(true); },
       error: (err) => {

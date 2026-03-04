@@ -5,7 +5,8 @@ namespace AzureDevOpsAgents.Api.Models;
 public record CreateConnectionRequest(
     string DisplayName,
     string OrganizationUrl,
-    string ProjectName);
+    string ProjectName,
+    string Pat);
 
 public record ConnectionDto(
     Guid Id,

@@ -24,17 +24,13 @@ export class ApiService {
     displayName: string;
     organizationUrl: string;
     projectName: string;
+    pat: string;
   }): Observable<Connection> {
     return this.http.post<Connection>(`${this.base}/connections`, payload);
   }
 
   deleteConnection(id: string): Observable<void> {
     return this.http.delete<void>(`${this.base}/connections/${id}`);
-  }
-
-  /** Returns the Azure DevOps OAuth login URL for a connection */
-  getOAuthLoginUrl(connectionId: string): string {
-    return `${this.base}/auth/ado/login?connectionId=${connectionId}`;
   }
 
   // ── Repos ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 using AzureDevOpsAgents.Api.Data;
 using AzureDevOpsAgents.Api.Data.Entities;
 using AzureDevOpsAgents.Api.Models;
+using AzureDevOpsAgents.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,7 +12,7 @@ namespace AzureDevOpsAgents.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
-public class ConnectionsController(AppDbContext db) : ControllerBase
+public class ConnectionsController(AppDbContext db, TokenEncryptionService encryption) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
@@ -39,13 +40,14 @@ public class ConnectionsController(AppDbContext db) : ControllerBase
         {
             DisplayName     = req.DisplayName,
             OrganizationUrl = req.OrganizationUrl.TrimEnd('/'),
-            ProjectName     = req.ProjectName
+            ProjectName     = req.ProjectName,
+            AccessToken     = encryption.Encrypt(req.Pat)
         };
         db.Connections.Add(conn);
         await db.SaveChangesAsync(ct);
 
         return CreatedAtAction(nameof(GetById), new { id = conn.Id },
-            new ConnectionDto(conn.Id, conn.DisplayName, conn.OrganizationUrl, conn.ProjectName, conn.CreatedAt, false));
+            new ConnectionDto(conn.Id, conn.DisplayName, conn.OrganizationUrl, conn.ProjectName, conn.CreatedAt, true));
     }
 
     [HttpDelete("{id:guid}")]

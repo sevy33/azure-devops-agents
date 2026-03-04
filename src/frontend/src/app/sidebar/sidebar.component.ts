@@ -28,9 +28,6 @@ import type { RepoInfo } from '../models/types';
           </button>
 
           <div class="sidebar__conn-actions">
-            @if (!conn.isAuthenticated) {
-              <button class="btn-link" (click)="authenticate(conn.id)">Authenticate</button>
-            }
             <button class="btn-link" (click)="newSession(conn.id)">New Chat</button>
           </div>
 
@@ -258,10 +255,6 @@ export class SidebarComponent {
 
   newSession(connectionId: string): void {
     this.store.createSession(connectionId);
-  }
-
-  authenticate(connectionId: string): void {
-    window.location.href = this.api.getOAuthLoginUrl(connectionId);
   }
 
   cloneRepo(connectionId: string, repoName: string): void {

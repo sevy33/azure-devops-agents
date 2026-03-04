@@ -12,11 +12,6 @@ export const routes: Routes = [
       import('./shell/shell.component').then(m => m.ShellComponent)
   },
   {
-    path: 'auth/success',
-    loadComponent: () =>
-      import('./auth-callback/auth-callback.component').then(m => m.AuthCallbackComponent)
-  },
-  {
     path: '**',
     redirectTo: 'dashboard'
   }
