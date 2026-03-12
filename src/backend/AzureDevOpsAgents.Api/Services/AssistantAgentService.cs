@@ -4,7 +4,9 @@ using AzureDevOpsAgents.Api.Hubs;
 using AzureDevOpsAgents.Api.Models;
 using GitHub.Copilot.SDK;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
+using System.Collections.Concurrent;
 
 namespace AzureDevOpsAgents.Api.Services;
 
@@ -14,10 +16,9 @@ namespace AzureDevOpsAgents.Api.Services;
 /// Delegates coding tasks to DeveloperAgentService.
 /// </summary>
 public class AssistantAgentService(
-    AppDbContext db,
+    IServiceScopeFactory scopeFactory,
     IHubContext<AgentHub> hub,
     McpServerManager mcp,
-    DeveloperAgentService developerAgent,
     TokenEncryptionService encryption,
     IConfiguration configuration,
     ILogger<AssistantAgentService> logger) : IAsyncDisposable
@@ -26,6 +27,7 @@ public class AssistantAgentService(
     private CopilotClient? _client;
     private string? _mcpConfigKey;
     private readonly SemaphoreSlim _startLock = new(1, 1);
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _sessionLocks = new();
 
     private async Task<CopilotClient> GetClientAsync(string orgName, string accessToken, CancellationToken ct = default)
     {
@@ -44,11 +46,16 @@ public class AssistantAgentService(
             _client = new CopilotClient(new CopilotClientOptions
             {
                 GitHubToken = githubToken,
-                CliArgs     = ["--mcp-config", mcpConfigPath],
-                LogLevel    = "warn"
+                CliArgs     = ["--additional-mcp-config", $"@{mcpConfigPath}", "--add-github-mcp-toolset", "memory"],
+                LogLevel    = "warning"
             });
             await _client.StartAsync();
             logger.LogInformation("Copilot CLI client started for Assistant agent (org: {Org})", orgName);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to start Copilot CLI client for org {Org}", orgName);
+            throw;
         }
         finally
         {
@@ -67,6 +74,21 @@ public class AssistantAgentService(
         string userContent,
         CancellationToken ct = default)
     {
+        var sessionLock = _sessionLocks.GetOrAdd(sessionId, _ => new SemaphoreSlim(1, 1));
+        await sessionLock.WaitAsync(ct);
+
+        var assistantJobId = Guid.NewGuid();
+
+        await hub.Clients.Group($"session-{sessionId}").SendAsync(
+            "AgentStatus",
+            new AgentStatusEvent(sessionId, assistantJobId, "Assistant", "Queued", "Message queued"),
+            CancellationToken.None);
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        try
+        {
         var session = await db.ChatSessions
             .Include(s => s.Connection)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
@@ -87,27 +109,52 @@ public class AssistantAgentService(
         });
         await db.SaveChangesAsync(ct);
 
+        await hub.Clients.Group($"session-{sessionId}").SendAsync(
+            "AgentStatus",
+            new AgentStatusEvent(sessionId, assistantJobId, "Assistant", "Running", "Thinking..."),
+            CancellationToken.None);
+
         // Client is created once per service instance with the MCP config baked in
         var client = await GetClientAsync(orgName, accessToken, ct);
 
-        // Resume an existing Copilot session, or create a new one
+        // Resume an existing Copilot session, or create a new one.
+        // Use "N" format (no hyphens) — the CLI rejects hyphens in session IDs.
+        var cliSessionId = sessionId.ToString("N");
         CopilotSession copilotSession;
         try
         {
-            copilotSession = await client.ResumeSessionAsync(sessionId.ToString(), new ResumeSessionConfig());
-        }
-        catch
-        {
-            copilotSession = await client.CreateSessionAsync(new SessionConfig
+            copilotSession = await client.ResumeSessionAsync(cliSessionId, new ResumeSessionConfig
             {
-                SessionId = sessionId.ToString(),
                 Streaming = true,
+                OnPermissionRequest = PermissionHandler.ApproveAll,
                 SystemMessage = new SystemMessageConfig
                 {
                     Mode    = SystemMessageMode.Append,
                     Content = BuildSystemMessage(connection.ProjectName, orgName)
                 }
             });
+        }
+        catch(Exception e)
+        {
+            try
+            {
+            copilotSession = await client.CreateSessionAsync(new SessionConfig
+            {
+                SessionId = cliSessionId,
+                Streaming = true,
+                OnPermissionRequest = PermissionHandler.ApproveAll,
+                SystemMessage = new SystemMessageConfig
+                {
+                    Mode    = SystemMessageMode.Append,
+                    Content = BuildSystemMessage(connection.ProjectName, orgName)
+                }
+            });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to create or resume Copilot session for session {SessionId}", sessionId);
+                throw;
+            }
         }
 
         await using (copilotSession)
@@ -146,22 +193,60 @@ public class AssistantAgentService(
                 }
             });
 
-            await copilotSession.SendAsync(new MessageOptions { Prompt = userContent });
-
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
-            using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-            await done.Task.WaitAsync(linkedCts.Token);
-
-            // Persist assistant response
-            var finalContent = fullContent.ToString();
-            db.ChatMessages.Add(new ChatMessage
+            try
             {
-                SessionId = sessionId,
-                Role      = MessageRole.Assistant,
-                Content   = finalContent
-            });
-            session.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+                await copilotSession.SendAsync(new MessageOptions { Prompt = userContent });
+
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+                await done.Task.WaitAsync(linkedCts.Token);
+
+                // Persist assistant response
+                var finalContent = fullContent.ToString();
+                db.ChatMessages.Add(new ChatMessage
+                {
+                    SessionId = sessionId,
+                    Role      = MessageRole.Assistant,
+                    Content   = finalContent
+                });
+                session.UpdatedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(CancellationToken.None);
+
+                await hub.Clients.Group($"session-{sessionId}").SendAsync(
+                    "AgentStatus",
+                    new AgentStatusEvent(sessionId, assistantJobId, "Assistant", "Succeeded", "Response complete"),
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error processing message for session {SessionId}", sessionId);
+
+                // Always send a final chunk so the frontend unblocks isSending
+                var errorChunk = fullContent.Length > 0 ? string.Empty : "_(Error: agent failed to respond. Please try again.)_";
+                await hub.Clients.Group($"session-{sessionId}").SendAsync(
+                    "MessageChunk",
+                    new MessageChunkEvent(sessionId, assistantMessageId, errorChunk, true),
+                    CancellationToken.None);
+
+                await hub.Clients.Group($"session-{sessionId}").SendAsync(
+                    "AgentStatus",
+                    new AgentStatusEvent(sessionId, assistantJobId, "Assistant", "Failed", ex.Message),
+                    CancellationToken.None);
+            }
+        }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unhandled assistant processing error for session {SessionId}", sessionId);
+
+            await hub.Clients.Group($"session-{sessionId}").SendAsync(
+                "AgentStatus",
+                new AgentStatusEvent(sessionId, assistantJobId, "Assistant", "Failed", ex.Message),
+                CancellationToken.None);
+        }
+        finally
+        {
+            sessionLock.Release();
         }
     }
 

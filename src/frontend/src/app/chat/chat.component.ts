@@ -6,6 +6,7 @@ import {
   inject,
   OnDestroy,
   OnInit,
+  signal,
   ViewChild
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -81,7 +82,7 @@ function renderMd(content: string): string {
           class="chat__textarea"
           rows="1"
           placeholder="Ask the assistant… (Enter to send, Shift+Enter for newline)"
-          [(ngModel)]="inputText"
+          [ngModel]="inputText()" (ngModelChange)="inputText.set($event)"
           [disabled]="isSending()"
           (keydown)="onKeyDown($event)"
           (input)="autoResize()"
@@ -98,16 +99,24 @@ function renderMd(content: string): string {
     </div>
   `,
   styles: [`
+    :host {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
     .chat {
       display: flex;
       flex-direction: column;
-      height: 100%;
+      flex: 1;
+      min-height: 0;
       overflow: hidden;
     }
 
     /* ── Messages ─────────────────────────────────────────────── */
     .chat__messages {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding: 1.5rem 1rem;
       display: flex;
@@ -249,11 +258,11 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
   private readonly api = inject(ApiService);
   private readonly sanitizer = inject(DomSanitizer);
 
-  inputText = '';
+  inputText = signal('');
   private shouldScrollToBottom = false;
 
   isSending = this.store.sendingMessage;
-  canSend = computed(() => this.inputText.trim().length > 0 && !this.isSending());
+  canSend = computed(() => this.inputText().trim().length > 0 && !this.isSending());
 
   private markdownCache = new Map<string, SafeHtml>();
 
@@ -303,8 +312,8 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.markdownCache.clear();
   }
 
-  sendMessage(): void {
-    const content = this.inputText.trim();
+  async sendMessage(): Promise<void> {
+    const content = this.inputText().trim();
     if (!content) return;
     const sessionId = this.store.activeSessionId();
     if (!sessionId) return;
@@ -320,10 +329,18 @@ export class ChatComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
     ]);
 
-    this.inputText = '';
+    this.inputText.set('');
     this.isSending.set(true);
     this.shouldScrollToBottom = true;
     this.resetTextarea();
+
+    // Ensure we're joined to the active session group before sending.
+    await this.signalR.connect();
+    const joined = await this.signalR.joinSession(sessionId);
+    if (!joined) {
+      this.isSending.set(false);
+      return;
+    }
 
     this.api.sendMessage(sessionId, content).subscribe({
       error: () => {

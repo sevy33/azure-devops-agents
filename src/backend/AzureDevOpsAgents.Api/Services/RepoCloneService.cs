@@ -3,8 +3,7 @@ using AzureDevOpsAgents.Api.Data.Entities;
 using AzureDevOpsAgents.Api.Models;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
-using Microsoft.AspNetCore.SignalR;
-using AzureDevOpsAgents.Api.Hubs;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AzureDevOpsAgents.Api.Services;
 
@@ -14,7 +13,7 @@ namespace AzureDevOpsAgents.Api.Services;
 /// </summary>
 public class RepoCloneService(
     AppDbContext db,
-    IHubContext<AgentHub> hubContext,
+    IServiceScopeFactory scopeFactory,
     IConfiguration configuration,
     TokenEncryptionService encryption,
     ILogger<RepoCloneService> logger)
@@ -57,13 +56,31 @@ public class RepoCloneService(
         await db.SaveChangesAsync(ct);
 
         // Clone in the background — caller gets the repo entity immediately
-        _ = Task.Run(() => RunCloneAsync(repo.Id, connection, repoName, localPath), CancellationToken.None);
+        _ = RunCloneAsync(repo.Id);
 
         return repo;
     }
 
-    private async Task RunCloneAsync(Guid repoId, AzureDevOpsConnection connection, string repoName, string localPath)
+    private async Task RunCloneAsync(Guid repoId)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var repoEntry = await scopedDb.Repos
+            .Include(r => r.Connection)
+            .FirstOrDefaultAsync(r => r.Id == repoId);
+
+        if (repoEntry is null)
+        {
+            logger.LogWarning("Repo entry {RepoId} not found when RunCloneAsync started", repoId);
+            return;
+        }
+
+        var connection = repoEntry.Connection;
+        var repoName = repoEntry.RepoName;
+        var localPath = repoEntry.LocalClonePath
+            ?? throw new InvalidOperationException($"Repo '{repoName}' has no local clone path.");
+
         try
         {
             Directory.CreateDirectory(localPath);
@@ -92,9 +109,6 @@ public class RepoCloneService(
             using var proc = Process.Start(psi)!;
             await proc.WaitForExitAsync();
 
-            var repoEntry = await db.Repos.FindAsync(repoId);
-            if (repoEntry is null) return;
-
             if (proc.ExitCode == 0)
             {
                 repoEntry.CloneStatus = CloneStatus.Ready;
@@ -109,18 +123,15 @@ public class RepoCloneService(
                 logger.LogError("Clone failed for {Repo}: {Error}", repoName, error);
             }
 
-            await db.SaveChangesAsync();
+            await scopedDb.SaveChangesAsync();
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Unexpected error cloning {Repo}", repoName);
-            var repoEntry = await db.Repos.FindAsync(repoId);
-            if (repoEntry is not null)
-            {
-                repoEntry.CloneStatus = CloneStatus.Failed;
-                repoEntry.CloneError = ex.Message;
-                await db.SaveChangesAsync();
-            }
+
+            repoEntry.CloneStatus = CloneStatus.Failed;
+            repoEntry.CloneError = ex.Message;
+            await scopedDb.SaveChangesAsync();
         }
     }
 

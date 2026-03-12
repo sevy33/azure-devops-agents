@@ -4,6 +4,7 @@ using AzureDevOpsAgents.Api.Hubs;
 using AzureDevOpsAgents.Api.Models;
 using GitHub.Copilot.SDK;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 
 namespace AzureDevOpsAgents.Api.Services;
@@ -14,7 +15,7 @@ namespace AzureDevOpsAgents.Api.Services;
 /// opens a pull request (success) or adds a comment to the work item (failure).
 /// </summary>
 public class DeveloperAgentService(
-    AppDbContext db,
+    IServiceScopeFactory scopeFactory,
     IHubContext<AgentHub> hub,
     McpServerManager mcp,
     TokenEncryptionService encryption,
@@ -32,6 +33,9 @@ public class DeveloperAgentService(
         string repoName,
         CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
         var session = await db.ChatSessions
             .Include(s => s.Connection)
             .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
@@ -60,14 +64,17 @@ public class DeveloperAgentService(
             new AgentStatusEvent(sessionId, job.Id, "Developer", "Queued", $"Work item #{workItemId}: {workItemTitle}"),
             ct);
 
-        // Run in background
-        _ = Task.Run(() => RunJobAsync(job.Id), CancellationToken.None);
+        // Run in background; service handles its own scope/lifetime.
+        _ = RunJobAsync(job.Id);
 
         return job;
     }
 
     private async Task RunJobAsync(Guid jobId)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
         var job = await db.AgentJobs
             .Include(j => j.Session)
                 .ThenInclude(s => s.Connection)
@@ -88,14 +95,14 @@ public class DeveloperAgentService(
 
         if (accessToken is null)
         {
-            await FailJobAsync(job, "No access token stored for this connection.");
+            await FailJobAsync(db, job, "No access token stored for this connection.");
             return;
         }
 
         var repoPath = job.Repo?.LocalClonePath;
         if (repoPath is null || !Directory.Exists(repoPath))
         {
-            await FailJobAsync(job, $"Repository '{job.Repo?.RepoName ?? "unknown"}' is not cloned on the server.");
+            await FailJobAsync(db, job, $"Repository '{job.Repo?.RepoName ?? "unknown"}' is not cloned on the server.");
             return;
         }
 
@@ -117,8 +124,8 @@ public class DeveloperAgentService(
             {
                 Cwd         = repoPath,
                 GitHubToken = githubToken,
-                CliArgs     = ["--mcp-config", mcpConfigPath],
-                LogLevel    = "warn"
+                CliArgs     = ["--additional-mcp-config", $"@{mcpConfigPath}", "--add-github-mcp-toolset", "memory"],
+                LogLevel    = "warning"
             });
 
             await client.StartAsync();
@@ -126,6 +133,7 @@ public class DeveloperAgentService(
             await using var session = await client.CreateSessionAsync(new SessionConfig
             {
                 Streaming  = true,
+                OnPermissionRequest = PermissionHandler.ApproveAll,
                 SystemMessage = new SystemMessageConfig
                 {
                     Mode    = SystemMessageMode.Append,
@@ -208,11 +216,11 @@ public class DeveloperAgentService(
             else if (logText.Contains("TASK_BLOCKED:"))
             {
                 var reason = System.Text.RegularExpressions.Regex.Match(logText, @"TASK_BLOCKED:\s*(.+)").Groups[1].Value.Trim();
-                await FailJobAsync(job, reason);
+                await FailJobAsync(db, job, reason);
             }
             else
             {
-                await FailJobAsync(job, "Task completed but no pull request was created.");
+                await FailJobAsync(db, job, "Task completed but no pull request was created.");
             }
 
             await db.SaveChangesAsync();
@@ -220,7 +228,7 @@ public class DeveloperAgentService(
         catch (Exception ex)
         {
             logger.LogError(ex, "Developer job {Job} threw an exception", job.Id);
-            await FailJobAsync(job, ex.Message);
+            await FailJobAsync(db, job, ex.Message);
         }
         finally
         {
@@ -236,7 +244,7 @@ public class DeveloperAgentService(
                     : job.ErrorMessage));
     }
 
-    private async Task FailJobAsync(AgentJob job, string reason)
+    private static async Task FailJobAsync(AppDbContext db, AgentJob job, string reason)
     {
         job.Status       = JobStatus.Failed;
         job.ErrorMessage = reason;

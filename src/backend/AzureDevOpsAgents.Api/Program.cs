@@ -24,7 +24,7 @@ builder.Services.AddSingleton<McpServerManager>();
 builder.Services.AddScoped<RepoCloneService>();
 builder.Services.AddScoped<AnalystAgentService>();
 builder.Services.AddScoped<DeveloperAgentService>();
-builder.Services.AddScoped<AssistantAgentService>();
+builder.Services.AddSingleton<AssistantAgentService>();
 
 // ── CORS — allow Angular dev server ──────────────────────────────────────────
 builder.Services.AddCors(opt =>

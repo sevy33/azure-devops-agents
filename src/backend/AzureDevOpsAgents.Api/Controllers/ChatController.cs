@@ -81,8 +81,8 @@ public class ChatController(
         var session = await db.ChatSessions.FindAsync([sessionId], ct);
         if (session is null) return NotFound();
 
-        // Process asynchronously — response streams via SignalR
-        _ = Task.Run(() => assistant.ProcessMessageAsync(sessionId, req.Content), CancellationToken.None);
+        // Fire-and-forget; Assistant service handles its own scope and errors.
+        _ = assistant.ProcessMessageAsync(sessionId, req.Content, CancellationToken.None);
 
         return Accepted();
     }

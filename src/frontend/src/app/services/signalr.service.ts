@@ -30,7 +30,12 @@ export class SignalRService implements OnDestroy {
   private onAgentLog: ((evt: AgentLogEvent) => void) | null = null;
 
   async connect(): Promise<void> {
-    if (this.connection) return;
+    if (this.connection && this.connection.state === 'Connected') return;
+
+    // If a previous start failed, rebuild the connection so we can retry.
+    if (this.connection && this.connection.state === 'Disconnected') {
+      this.connection = null;
+    }
 
     this.status.set('connecting');
 
@@ -51,7 +56,16 @@ export class SignalRService implements OnDestroy {
     );
 
     this.connection.onreconnecting(() => this.status.set('connecting'));
-    this.connection.onreconnected(() => this.status.set('connected'));
+    this.connection.onreconnected(async () => {
+      this.status.set('connected');
+
+      // SignalR group membership is connection-scoped, so rejoin after reconnect.
+      if (this.currentSessionId) {
+        await this.connection?.invoke('JoinSession', this.currentSessionId).catch(() => {
+          this.status.set('error');
+        });
+      }
+    });
     this.connection.onclose(() => this.status.set('disconnected'));
 
     try {
@@ -62,15 +76,30 @@ export class SignalRService implements OnDestroy {
     }
   }
 
-  async joinSession(sessionId: string): Promise<void> {
-    if (this.currentSessionId === sessionId) return;
+  async joinSession(sessionId: string): Promise<boolean> {
+    if (this.currentSessionId === sessionId) return true;
+
+    if (!this.connection || this.connection.state !== 'Connected') {
+      this.status.set('error');
+      return false;
+    }
 
     if (this.currentSessionId) {
       await this.connection?.invoke('LeaveSession', this.currentSessionId).catch(() => {});
     }
 
     this.currentSessionId = sessionId;
-    await this.connection?.invoke('JoinSession', sessionId).catch(() => {});
+    const joined = await this.connection
+      .invoke('JoinSession', sessionId)
+      .then(() => true)
+      .catch(() => false);
+
+    if (!joined) {
+      this.status.set('error');
+      return false;
+    }
+
+    return true;
   }
 
   async leaveSession(): Promise<void> {
